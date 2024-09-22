@@ -1,0 +1,235 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+def rolling_window_model_with_pnl(
+    data,
+    feature_cols,
+    target_col,
+    initial_train_period,
+    test_period,
+    step,
+    scaler=StandardScaler(),
+    model=LinearRegression(),
+    thres1=-1,
+    thres2=1
+):
+    """
+    Perform rolling window training, testing, and collect predictions for PnL calculation.
+
+    Parameters:
+    - data: DataFrame with datetime index.
+    - feature_cols: List of feature column names.
+    - target_col: Name of the target column.
+    - initial_train_period: Timedelta string for initial training period (e.g., '30D' for 30 days).
+    - test_period: Timedelta string for test period (e.g., '7D' for 7 days).
+    - step: Timedelta string for step size (e.g., '7D' to move weekly).
+    - scaler: Scaler object (default: StandardScaler).
+    - model: Model object (default: LinearRegression).
+    - thres1: Threshold 1 for PnL calculation.
+    - thres2: Threshold 2 for PnL calculation.
+
+    Returns:
+    - all_predictions: DataFrame with all test data, predictions, and PnL calculations.
+    """
+    predictions = []
+
+    # Ensure data is sorted and datetime is the index
+    data = data.sort_values('datetime').reset_index(drop=True)
+    data['datetime'] = pd.to_datetime(data['datetime'])
+    data.set_index('datetime', inplace=True)
+    
+    start_date = data.index.min()
+    end_date = data.index.max()
+    
+    train_end = start_date + pd.Timedelta(initial_train_period)
+    test_end = train_end + pd.Timedelta(test_period)
+    
+    while test_end <= end_date:
+        # Define train and test sets
+        train_data = data[start_date:train_end]
+        test_data = data[train_end:test_end]
+        
+        if test_data.empty:
+            break  # Exit if no test data
+        
+        X_train = train_data[feature_cols]
+        y_train = train_data[target_col]
+        X_test = test_data[feature_cols]
+        y_test = test_data[target_col]
+        
+        # Scale the data
+        scaler.fit(X_train)
+        X_train_scaled = scaler.transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        
+        # Train the model
+        model.fit(X_train_scaled, y_train)
+        
+        # Predict
+        y_pred = model.predict(X_test_scaled)
+        
+        # Store predictions with actuals and timestamps
+        test_data = test_data.copy()
+        test_data['prediction'] = y_pred
+        predictions.append(test_data[[target_col, 'prediction']])
+        
+        # Move the window forward
+        start_date += pd.Timedelta(step)
+        train_end += pd.Timedelta(step)
+        test_end += pd.Timedelta(step)
+    
+    # Concatenate all predictions
+    all_predictions = pd.concat(predictions)
+    all_predictions.reset_index(inplace=True)  # Bring datetime back as a column
+    
+    return all_predictions
+
+
+# Apply imbalance categories
+news["imbalance_cat"] = news["rfq_imbalance_5_60min"].apply(lambda x: apply_imbalance_cat(x, -1, 1))
+
+# Fill NaNs with 0
+news = news.fillna(0)
+
+# Select numerical columns
+numerical_cols = news.select_dtypes(include=[np.number]).columns
+news_num = news[numerical_cols]
+
+# Identify specific columns to include/exclude based on your criteria
+to_5min_cols = [col for col in news_num if "5min_around" in col]
+amounteur_cols = [col for col in news_num if "amounteur" in col]
+nb_rfq_col = [col for col in news_num if col.startswith("nb_rfq_pay")]
+
+# Define old prices (ensure these column names are correct)
+old_prices = [
+    "P_30min", "p_10min", "p_5min", "P_1min", "P_305", "P_105",
+    "P_5s", "P_15", "p0", "p1s", "p5s", "p10s", "p30s",
+    "pimin", "p5min", "absolute_sum_of_changes_around_5min",
+    'rmse_around_5min', 'mean_prices_tomin', "std_prices_tomin",
+    "future_prices_p10min", "p30min", "p1n", "p2n", "p3n",
+    "p5n", "p10n", "p1n_p5min"
+] + [col for col in news_num if col.startswith("imbalance_amounteur10yequ")] + [col for col in news_num if col.startswith("imbalance")]
+
+# Define 55_cols (ensure these column names are correct)
+p5s_cols = [col for col in news_num if col.startswith("p5s")]
+p_5s_cols = [col for col in news_num if col.startswith("p_5s")]
+return_cols = [col for col in news_num if col.startswith("return")]
+_55_cols = p5s_cols + p_5s_cols + return_cols
+
+# Define additional columns to drop (replace with your actual columns)
+combi_cols = ['combi_col1', 'combi_col2']  # Replace with your actual columns
+future_prices = ['future_price1', 'future_price2']  # Replace with your actual columns
+
+# Combine columns to drop
+to_drop_from_train = (
+    combi_cols + _55_cols +
+    [col for col in news_num.columns if "60min" in col] +
+    to_5min_cols + 
+    future_prices + old_prices + 
+    [col for col in news.columns if col.endswith("Event")] +
+    ["difference", "actual_prior"]
+)
+
+# Define target column
+y_col = "rfq_imbalance_5_60min"
+
+# Select feature columns
+cols = [col for col in news_num.columns.tolist() if col not in to_drop_from_train]
+
+# Ensure 'datetime' is in datetime format and sort the data
+news['datetime'] = pd.to_datetime(news['datetime'])
+news = news.sort_values('datetime').reset_index(drop=True)
+
+# Execute the rolling window to collect predictions
+initial_train_period = '30D'  # Initial training period (e.g., 30 days)
+test_period = '7D'            # Test period (e.g., 7 days)
+step = '7D'                   # Step size (e.g., move weekly)
+
+# Perform rolling window training and prediction
+all_predictions = rolling_window_model_with_pnl(
+    data=news,
+    feature_cols=cols,
+    target_col=y_col,
+    initial_train_period=initial_train_period,
+    test_period=test_period,
+    step=step,
+    scaler=StandardScaler(),
+    model=LinearRegression(),
+    thres1=1,  # Set your desired thresholds
+    thres2=-1
+)
+
+# Calculate PnL based on predictions
+all_predictions_pnl = pnl(
+    df=all_predictions,
+    signal_col='prediction',
+    y_col=y_col,
+    thres1=1,
+    thres2=-1
+)
+
+# Plot cumulative PnL
+def plot_cumulative_pnl(df, signal_col):
+    """
+    Plot cumulative PnL over time.
+
+    Parameters:
+    - df: DataFrame containing 'datetime' and 'cumsum_pnl_{signal_col}'.
+    - signal_col: Column name for the signal (predictions).
+    """
+    pnl_col = f"cumsum_pnl_{signal_col}"
+    
+    fig = make_subplots(rows=1, cols=1, subplot_titles=("Cumulative PnL Over Time",))
+    
+    fig.add_trace(
+        go.Scatter(
+            x=df['datetime'], 
+            y=df[pnl_col],
+            mode="lines", 
+            name="Cumulative PnL",
+            line=dict(color="green")
+        ),
+        row=1, col=1
+    )
+    
+    fig.update_layout(
+        width=1200,
+        height=600,
+        title_text="Cumulative PnL Over Time",
+        xaxis_title="Datetime",
+        yaxis_title="Cumulative PnL"
+    )
+    
+    fig.show()
+
+# Call the plotting function
+plot_cumulative_pnl(all_predictions_pnl, 'prediction')
+
+# Optional: Calculate and print Sharpe Ratios
+def calculate_sharpe(df, signal_col):
+    """
+    Calculate and print Sharpe Ratios for training and testing periods.
+
+    Parameters:
+    - df: DataFrame containing 'datetime' and 'pnl_{signal_col}'.
+    - signal_col: Column name for the signal (predictions).
+    """
+    pnl_col = f"pnl_{signal_col}"
+    cumsum_pnl_col = f"cumsum_pnl_{signal_col}"
+    
+    # Define training and testing periods based on initial_train_period and step
+    # Adjust as needed based on your rolling window implementation
+    # Here, we consider the entire period as testing for simplicity
+    # Modify to separate training and testing if required
+    
+    # Calculate Sharpe Ratio
+    sharpe_ratio = df[pnl_col].mean() / df[pnl_col].std() * np.sqrt(252)  # Annualized Sharpe Ratio
+    print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
+
+# Calculate Sharpe Ratio
+calculate_sharpe(all_predictions_pnl, 'prediction')
